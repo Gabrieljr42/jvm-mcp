@@ -1,6 +1,7 @@
 package dev.jvmmcp.core.spring;
 
 import com.sun.tools.attach.VirtualMachine;
+import dev.jvmmcp.core.jmx.JmxConnectionManager;
 import dev.jvmmcp.core.model.SpringBeanDetail;
 import dev.jvmmcp.core.model.SpringBeansReport;
 import dev.jvmmcp.core.model.SpringContextBeans;
@@ -21,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 class SpringBeansClientTest {
@@ -79,6 +82,48 @@ class SpringBeansClientTest {
         assertThat(report.pid()).isEqualTo(123L);
         assertThat(report.discoverySource()).contains("ACTUATOR_HTTP");
         assertThat(report.totalBeans()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("lazy JMX provider is not called when Actuator HTTP returns beans")
+    void shouldSkipJmxConnectionWhenActuatorHttpSucceeds() throws Exception {
+        when(actuatorProbe.probe(virtualMachine)).thenReturn(
+            Optional.of(new ActuatorProbe.ProbeResult("http://localhost:8080/actuator/beans", SAMPLE_ACTUATOR_JSON))
+        );
+
+        SpringBeansReport report = client.inspectBeansWithJmxProvider(
+            123L, virtualMachine, () -> { throw new AssertionError("JMX must remain unopened"); }, "*Service*"
+        );
+
+        assertThat(report.discoverySource()).contains("ACTUATOR_HTTP");
+        assertThat(report.totalBeans()).isEqualTo(1);
+        assertThat(report.getAllBeans().get(0).name()).isEqualTo("orderService");
+    }
+
+    @Test
+    @DisplayName("lazy JMX provider is used and closed after Actuator HTTP is unavailable")
+    void shouldUseAndCloseJmxConnectionAfterActuatorHttpMisses() throws Exception {
+        when(actuatorProbe.probe(virtualMachine)).thenReturn(Optional.empty());
+        JmxConnectionManager manager = org.mockito.Mockito.mock(JmxConnectionManager.class);
+        when(manager.getMBeanServerConnection()).thenReturn(mbsc);
+        ObjectName endpointName = new ObjectName("org.springframework.boot:type=Endpoint,name=Beans");
+        when(mbsc.isRegistered(endpointName)).thenReturn(true);
+        when(mbsc.invoke(eq(endpointName), eq("beans"), any(), any())).thenReturn(SAMPLE_ACTUATOR_JSON);
+
+        SpringBeansReport report = client.inspectBeansWithJmxProvider(456L, virtualMachine, () -> manager, null);
+
+        assertThat(report.discoverySource()).contains("JMX_MBEAN");
+        verify(manager).close();
+    }
+
+    @Test
+    @DisplayName("lazy JMX connection failure propagates after Actuator HTTP misses")
+    void shouldPropagateJmxConnectionFailureAfterHttpMisses() {
+        when(actuatorProbe.probe(virtualMachine)).thenReturn(Optional.empty());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> client.inspectBeansWithJmxProvider(
+            123L, virtualMachine, () -> { throw new java.io.IOException("JMX unavailable"); }, null
+        )).isInstanceOf(java.io.IOException.class).hasMessage("JMX unavailable");
     }
 
     @Test

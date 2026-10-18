@@ -8,6 +8,8 @@ import dev.jvmmcp.core.model.SpringBeanDetail;
 import dev.jvmmcp.core.model.SpringBeansReport;
 import dev.jvmmcp.core.model.SpringContextBeans;
 import dev.jvmmcp.core.spring.SpringBeansClient;
+import dev.jvmmcp.core.spring.ActuatorProbe;
+import dev.jvmmcp.core.spring.SpringBeansParser;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,6 +40,9 @@ class SpringBeansToolHandlerTest {
 
     @Mock
     private VirtualMachine mockVm;
+
+    @Mock
+    private ActuatorProbe mockActuatorProbe;
 
     @Test
     @DisplayName("constructors initialize properly")
@@ -88,6 +93,11 @@ class SpringBeansToolHandlerTest {
             mockBeansClient,
             (vm, p) -> { throw new IOException("JMX error"); }
         );
+        when(mockBeansClient.inspectBeansWithJmxProvider(eq(123L), any(), any(), any())).thenAnswer(invocation -> {
+            SpringBeansClient.JmxConnectionProvider provider = invocation.getArgument(2);
+            provider.connect();
+            return null;
+        });
 
         assertThatThrownBy(() -> handler.execute("list_spring_beans", Map.of("pid", 123)))
             .isInstanceOf(IOException.class)
@@ -107,10 +117,41 @@ class SpringBeansToolHandlerTest {
             mockBeansClient,
             (vm, p) -> { throw new IOException("JMX error"); }
         );
+        when(mockBeansClient.inspectBeansWithJmxProvider(eq(123L), any(), any(), any())).thenAnswer(invocation -> {
+            SpringBeansClient.JmxConnectionProvider provider = invocation.getArgument(2);
+            provider.connect();
+            return null;
+        });
 
         assertThatThrownBy(() -> handler.execute("list_spring_beans", Map.of("pid", 123)))
             .isInstanceOf(IOException.class);
 
+        verify(mockAttachService).detach(mockVm);
+    }
+
+    @Test
+    @DisplayName("Actuator discovery avoids JMX and detaches the attached VM")
+    void testActuatorDiscoverySkipsJmxConnection() throws Exception {
+        when(mockAttachService.attach("123")).thenReturn(AttachResult.success("123", mockVm));
+        when(mockActuatorProbe.probe(mockVm)).thenReturn(Optional.of(new ActuatorProbe.ProbeResult(
+            "http://localhost:8080/actuator/beans",
+            """
+                {"contexts":{"application":{"beans":{"orderService":{"aliases":[],"scope":"singleton","type":"example.OrderService","dependencies":[]}}}}}
+                """
+        )));
+
+        SpringBeansClient client = new SpringBeansClient(mockActuatorProbe, new SpringBeansParser());
+        SpringBeansToolHandler handler = new SpringBeansToolHandler(
+            mockAttachService,
+            client,
+            (vm, p) -> { throw new AssertionError("JMX must not be opened when Actuator responds"); }
+        );
+
+        Map<String, Object> result = handler.execute("list_spring_beans", Map.of("pid", 123));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) result.get("content");
+        assertThat(content.get(0).get("text").toString()).contains("ACTUATOR_HTTP", "orderService");
         verify(mockAttachService).detach(mockVm);
     }
 
@@ -122,7 +163,11 @@ class SpringBeansToolHandlerTest {
         SpringBeansReport report = new SpringBeansReport(123, "JMX", 1, List.of(
             new SpringContextBeans("root", null, 1, List.of(bean))
         ));
-        when(mockBeansClient.inspectBeans(eq(123L), any(), any(), eq("*Service*"))).thenReturn(report);
+        when(mockBeansClient.inspectBeansWithJmxProvider(eq(123L), any(), any(), eq("*Service*"))).thenAnswer(invocation -> {
+            SpringBeansClient.JmxConnectionProvider provider = invocation.getArgument(2);
+            provider.connect().close();
+            return report;
+        });
 
         SpringBeansToolHandler handler = new SpringBeansToolHandler(
             mockAttachService,
@@ -146,7 +191,11 @@ class SpringBeansToolHandlerTest {
         SpringBeansReport report = new SpringBeansReport(123, "JMX", 1, List.of(
             new SpringContextBeans("root", null, 1, List.of(bean))
         ));
-        when(mockBeansClient.inspectBeans(eq(123L), any(), any(), any())).thenReturn(report);
+        when(mockBeansClient.inspectBeansWithJmxProvider(eq(123L), any(), any(), any())).thenAnswer(invocation -> {
+            SpringBeansClient.JmxConnectionProvider provider = invocation.getArgument(2);
+            provider.connect().close();
+            return report;
+        });
         when(mockBeansClient.getBeanDetail(report, "orderService")).thenReturn(Optional.of(bean));
 
         SpringBeansToolHandler handler = new SpringBeansToolHandler(

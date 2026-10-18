@@ -88,25 +88,26 @@ public class SpringBeansToolHandler implements ToolHandler {
         }
 
         VirtualMachine vm = attachResult.virtualMachine().orElse(null);
-        boolean detached = false;
+        boolean[] jmxManagerOwnsVm = {false};
         List<Map<String, Object>> content = new ArrayList<>();
         try {
-            try (JmxConnectionManager jmxManager = jmxConnector.connect(vm, pid)) {
-                detached = true;
-                String filterGlob = ToolArgs.getStringArg(args, "filter", false);
-                SpringBeansReport report = beansClient.inspectBeans(pid, vm, jmxManager.getMBeanServerConnection(), filterGlob);
+            String filterGlob = ToolArgs.getStringArg(args, "filter", false);
+            SpringBeansReport report = beansClient.inspectBeansWithJmxProvider(pid, vm, () -> {
+                JmxConnectionManager manager = jmxConnector.connect(vm, pid);
+                jmxManagerOwnsVm[0] = true;
+                return manager;
+            }, filterGlob);
 
-                if ("list_spring_beans".equals(toolName)) {
-                    content.add(Map.of("type", "text", "text", SimpleJson.toJson(report)));
-                } else if ("get_bean_detail".equals(toolName)) {
-                    String beanName = ToolArgs.getStringArg(args, "beanName", true);
-                    content.add(Map.of("type", "text", "text", SimpleJson.toJson(beansClient.getBeanDetail(report, beanName).orElse(null))));
-                } else {
-                    throw new IllegalArgumentException("Unknown Spring Beans tool: " + toolName);
-                }
+            if ("list_spring_beans".equals(toolName)) {
+                content.add(Map.of("type", "text", "text", SimpleJson.toJson(report)));
+            } else if ("get_bean_detail".equals(toolName)) {
+                String beanName = ToolArgs.getStringArg(args, "beanName", true);
+                content.add(Map.of("type", "text", "text", SimpleJson.toJson(beansClient.getBeanDetail(report, beanName).orElse(null))));
+            } else {
+                throw new IllegalArgumentException("Unknown Spring Beans tool: " + toolName);
             }
         } finally {
-            if (vm != null && !detached) {
+            if (vm != null && !jmxManagerOwnsVm[0]) {
                 try {
                     attachService.detach(vm);
                 } catch (Exception ignored) {

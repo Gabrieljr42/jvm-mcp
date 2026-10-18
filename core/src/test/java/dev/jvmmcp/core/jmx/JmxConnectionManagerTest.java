@@ -28,6 +28,17 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class JmxConnectionManagerTest {
 
+    @Test
+    @DisplayName("connecting to the current PID retains and detaches the attached VM")
+    void shouldDetachAttachedVmWhenConnectingToCurrentPid() throws Exception {
+        VirtualMachine vm = mock(VirtualMachine.class);
+
+        JmxConnectionManager manager = JmxConnectionManager.connect(vm, ProcessHandle.current().pid());
+        manager.close();
+
+        verify(vm).detach();
+    }
+
     @Mock
     private VirtualMachine virtualMachine;
 

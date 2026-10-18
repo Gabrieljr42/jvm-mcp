@@ -93,16 +93,20 @@ public class BeansCommand implements Callable<Integer> {
                     return 1;
                 }
 
-                try (JmxConnectionManager jmxManager = attachResult.virtualMachine().isPresent()
-                        ? JmxConnectionManager.connect(attachResult.virtualMachine().get(), pid)
-                        : JmxConnectionManager.connectLocal()) {
-
-                    report = client.inspectBeans(
-                        pid,
-                        attachResult.virtualMachine().orElse(null),
-                        jmxManager.getMBeanServerConnection(),
-                        filter
-                    );
+                com.sun.tools.attach.VirtualMachine vm = attachResult.virtualMachine().orElse(null);
+                boolean[] jmxManagerOwnsVm = {false};
+                try {
+                    report = client.inspectBeansWithJmxProvider(pid, vm, () -> {
+                        JmxConnectionManager manager = vm != null
+                            ? JmxConnectionManager.connect(vm, pid)
+                            : JmxConnectionManager.connectLocal();
+                        jmxManagerOwnsVm[0] = true;
+                        return manager;
+                    }, filter);
+                } finally {
+                    if (vm != null && !jmxManagerOwnsVm[0]) {
+                        attachService.detach(vm);
+                    }
                 }
             } catch (Exception e) {
                 System.err.println("[jvm-mcp] Error inspecting Spring beans: " + e.getMessage());

@@ -1,6 +1,7 @@
 package dev.jvmmcp.core.spring;
 
 import com.sun.tools.attach.VirtualMachine;
+import dev.jvmmcp.core.jmx.JmxConnectionManager;
 import dev.jvmmcp.core.model.SpringBeanDetail;
 import dev.jvmmcp.core.model.SpringBeansReport;
 import dev.jvmmcp.core.model.SpringContextBeans;
@@ -13,6 +14,11 @@ import java.util.*;
  * High-level service inspecting Spring Beans via a dual strategy: Actuator HTTP with automatic JMX fallback.
  */
 public class SpringBeansClient {
+
+    @FunctionalInterface
+    public interface JmxConnectionProvider {
+        JmxConnectionManager connect() throws Exception;
+    }
 
     private final ActuatorProbe actuatorProbe;
     private final SpringBeansParser beansParser;
@@ -45,6 +51,20 @@ public class SpringBeansClient {
         }
 
         return new SpringBeansReport(pid, "NOT_AVAILABLE (Actuator HTTP not reachable and JMX Beans endpoint missing)", 0, List.of());
+    }
+
+    public SpringBeansReport inspectBeansWithJmxProvider(long pid, VirtualMachine vm, JmxConnectionProvider jmxConnectionProvider, String filterGlob) throws Exception {
+        if (vm != null) {
+            Optional<ActuatorProbe.ProbeResult> probeResult = actuatorProbe.probe(vm);
+            if (probeResult.isPresent()) {
+                SpringBeansReport report = beansParser.parse(pid, "ACTUATOR_HTTP (" + probeResult.get().url() + ")", probeResult.get().rawJson());
+                return applyFilter(report, filterGlob);
+            }
+        }
+
+        try (JmxConnectionManager jmxManager = jmxConnectionProvider.connect()) {
+            return inspectBeans(pid, null, jmxManager.getMBeanServerConnection(), filterGlob);
+        }
     }
 
     public SpringBeansReport inspectFromActuatorUrl(long pid, String baseUrl, String filterGlob) {

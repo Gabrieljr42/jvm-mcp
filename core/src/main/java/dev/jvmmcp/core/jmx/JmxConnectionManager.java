@@ -41,7 +41,7 @@ public class JmxConnectionManager implements AutoCloseable {
 
         long currentPid = ProcessHandle.current().pid();
         if (pid == currentPid) {
-            return connectLocal();
+            return new JmxConnectionManager(pid, vm, null, ManagementFactory.getPlatformMBeanServer());
         }
 
         String connectorAddress = resolveConnectorAddress(vm);

@@ -316,6 +316,36 @@ class BeansCommandTest {
     }
 
     @Test
+    @DisplayName("beans command uses Actuator before opening JMX and detaches the VM")
+    void shouldUseActuatorBeforeJmxForAttachedProcess() throws Exception {
+        long targetPid = ProcessHandle.current().pid() + 1;
+        com.sun.tools.attach.VirtualMachine mockVm = org.mockito.Mockito.mock(com.sun.tools.attach.VirtualMachine.class);
+        java.util.Properties systemProperties = new java.util.Properties();
+        systemProperties.setProperty("server.port", serverBaseUrl.substring(serverBaseUrl.lastIndexOf(':') + 1));
+        when(mockVm.getSystemProperties()).thenReturn(systemProperties);
+        when(mockVm.getAgentProperties()).thenReturn(new java.util.Properties());
+        when(mockAttachService.attach(String.valueOf(targetPid))).thenReturn(AttachResult.success(String.valueOf(targetPid), mockVm));
+
+        BeansCommand command = new BeansCommand(mockAttachService);
+        command.pid = targetPid;
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        PrintStream originalOut = System.out;
+        try {
+            System.setOut(new PrintStream(out));
+            Integer exitCode = command.call();
+
+            assertThat(exitCode).isZero();
+            assertThat(out.toString()).contains("ACTUATOR_HTTP", "orderService");
+            org.mockito.Mockito.verify(mockAttachService).detach(mockVm);
+            org.mockito.Mockito.verify(mockVm, org.mockito.Mockito.never()).startLocalManagementAgent();
+            org.mockito.Mockito.verify(mockVm, org.mockito.Mockito.never()).loadAgent(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+        } finally {
+            System.setOut(originalOut);
+        }
+    }
+
+    @Test
     @DisplayName("beans command on attached remote PID should attempt connect")
     void shouldAttemptRemoteConnectOnRemoteVm() throws Exception {
         long targetPid = 100L;
