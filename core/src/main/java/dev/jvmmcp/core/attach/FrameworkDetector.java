@@ -95,8 +95,8 @@ public final class FrameworkDetector {
             return matcher.group(1) != null ? matcher.group(1) : matcher.group(2);
         }
 
-        String unquoted = command.replace("\"", "").trim();
-        return !unquoted.contains(" ") && unquoted.toLowerCase().endsWith(".jar") ? unquoted : null;
+        String token = firstCommandToken(command);
+        return token.toLowerCase().endsWith(".jar") ? token : null;
     }
 
     private static String firstCommandToken(String displayName) {
